@@ -1,0 +1,510 @@
+import React, { useState, useRef, useMemo } from 'react';
+import { 
+  ChevronRight, 
+  ArrowLeft, 
+  Leaf,
+  CheckCircle2,
+  XCircle,
+  Trophy,
+  RotateCcw,
+  Copy,
+  ClipboardCheck,
+  Send,
+  AlertCircle,
+  Type,
+  FileText,
+  ArrowRight,
+  ShieldCheck,
+  Search,
+  Zap,
+  Eye
+} from 'lucide-react';
+
+// --- UTILITY COMPONENTS ---
+const ApePadlockIcon = () => (
+  <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="w-12 h-12">
+    <rect x="14" y="24" width="20" height="18" rx="5" fill="currentColor" fillOpacity="0.1" />
+    <circle cx="18" cy="30" r="1.5" fill="currentColor" />
+    <circle cx="30" cy="30" r="1.5" fill="currentColor" />
+    <path d="M20 36h8" strokeWidth="2.5" />
+    <path d="M14 28c-3 0-4 3-4 5s1 5 4 5" />
+    <path d="M34 28c3 0 4 3 4 5s-1 5-4 5" />
+    <path d="M34 24V14c0-5.523-4.477-10-10-10S14 8.477 14 14" stroke="currentColor" strokeWidth="4" className="text-amber-500" />
+    <circle cx="14" cy="14" r="2" fill="white" stroke="currentColor" strokeWidth="2" />
+  </svg>
+);
+
+// --- CUSTOM LOGIC EVALUATOR ---
+const evaluateLogic = (formula, scope) => {
+  let s = String(formula || "").replace(/\s+/g, '');
+  Object.keys(scope).forEach(atom => {
+    s = s.split(atom).join(scope[atom]);
+  });
+
+  const ops = {
+    '~': (a) => (a === 'T' ? 'F' : 'T'),
+    '&': (a, b) => (a === 'T' && b === 'T' ? 'T' : 'F'),
+    'v': (a, b) => (a === 'T' || b === 'T' ? 'T' : 'F'),
+    '→': (a, b) => (a === 'T' && b === 'F' ? 'F' : 'T'),
+    '↔': (a, b) => (a === b ? 'T' : 'F')
+  };
+
+  const solve = (str) => {
+    let current = str;
+    while (current.includes('(')) {
+      current = current.replace(/\(([^()]+)\)/g, (_, inner) => solve(inner));
+    }
+    while (current.includes('~')) {
+      current = current.replace(/~([TF])/, (_, val) => ops['~'](val));
+    }
+    while (current.includes('&')) {
+      current = current.replace(/([TF])&([TF])/, (_, a, b) => ops['&'](a, b));
+    }
+    while (current.includes('v')) {
+      current = current.replace(/([TF])v([TF])/, (_, a, b) => ops['v'](a, b));
+    }
+    while (current.includes('→')) {
+      current = current.replace(/([TF])→([TF])/, (_, a, b) => ops['→'](a, b));
+    }
+    while (current.includes('↔')) {
+      current = current.replace(/([TF])↔([TF])/, (_, a, b) => ops['↔'](a, b));
+    }
+    return current;
+  };
+  return solve(s);
+};
+
+// --- TRUTH TABLE GENERATOR ---
+const generateTT = (formula) => {
+  const f = String(formula || "");
+  const atoms = Array.from(new Set(f.match(/[P-Z]/g) || [])).sort();
+  const numRows = Math.pow(2, atoms.length);
+  const rows = [];
+  for (let i = 0; i < numRows; i++) {
+    const scope = {};
+    atoms.forEach((atom, idx) => {
+      scope[atom] = (i & Math.pow(2, atoms.length - 1 - idx)) ? 'F' : 'T';
+    });
+    rows.push({ ...scope, result: evaluateLogic(f, scope) });
+  }
+  return { atoms, rows };
+};
+
+// --- PROOF VALIDATION ENGINE ---
+const validateProof = (proofText, targetSequent) => {
+  try {
+    const ts = String(targetSequent || "");
+    const normalizedText = (proofText || "").replace(/->/g, '→').replace(/<->/g, '↔').replace(/-/g, '~');
+    if (!ts.includes('⊢')) return { valid: false, error: "Missing turnstile symbol (⊢)." };
+    
+    const [premisesStr, conclusion] = ts.split('⊢').map(s => s.trim());
+    const targetPremises = premisesStr ? premisesStr.split(',').map(s => s.trim().replace(/\s+/g, '')) : [];
+    const targetConclusion = conclusion.replace(/\s+/g, '');
+    
+    const lines = normalizedText.split('\n').filter(l => l.trim());
+    if (lines.length === 0) return { valid: false, error: "Proof is empty." };
+
+    const proofState = []; 
+    for (let i = 0; i < lines.length; i++) {
+      const match = lines[i].match(/^\s*([\d,\s]*)\s*\((\d+)\)\s*(.*?)\s+([\d,\s]*[a-zA-Z&~→↔]+)\s*$/);
+      if (!match) return { valid: false, error: `Line ${i + 1} format error. Format: Deps (Line#) Formula Rule` };
+      
+      const deps = new Set(match[1].split(',').map(s => s.trim()).filter(s => s).map(Number));
+      const lineNum = parseInt(match[2]);
+      const formula = match[3].replace(/\s+/g, '');
+      
+      if (i === lines.length - 1) {
+        const formulaMatches = formula === targetConclusion;
+        const depsCorrect = Array.from(deps).every(d => {
+            const sourceLine = proofState.concat({deps, lineNum, formula}).find(p => p.lineNum === d);
+            return sourceLine && targetPremises.includes(sourceLine.formula);
+        });
+        if (formulaMatches && depsCorrect) return { valid: true };
+        return { valid: false, error: "Target conclusion not reached or unresolved dependencies." };
+      }
+      proofState.push({ deps, lineNum, formula });
+    }
+    return { valid: false, error: "Target conclusion not reached." };
+  } catch (e) { return { valid: false, error: "Logic parsing error." }; }
+};
+
+const LOGIC_PRIMER_DATA = [
+  {
+    id: 1,
+    title: "Chapter 1: Sentential Logic",
+    subsections: [
+      { id: "1.1", title: "Logical Notions", exercises: [{ id: "ex1.1", title: "Exercise 1.1", questions: [{ q: "Every premise of a valid argument is true.", a: false }, { q: "Every invalid argument has a false conclusion.", a: false }, { q: "Every valid argument has exactly two premises.", a: false }, { q: "Some valid arguments have false conclusions.", a: true }, { q: "Some valid arguments have a false conclusion despite having premises that are all true.", a: false }, { q: "A sound argument cannot have a false conclusion.", a: true }, { q: "Some sound arguments are invalid.", a: false }, { q: "Some unsound arguments have true premises.", a: true }, { q: "Premises of sound arguments entail their conclusions.", a: true }, { q: "If an argument has true premises and a true conclusion then it is sound.", a: false }] }] },
+      { id: "1.2", title: "Language", exercises: [
+          { 
+            id: "ex1.2.1", 
+            title: "Exercise 1.2.1", 
+            description: "Identify whether each string is a well-formed formula (wff). Rule 1: Sentence letters are wffs. Rule 2: ~φ is a wff if φ is. Rule 3: (φ [binary-op] ψ) is a wff. Note: Mandatory parentheses for binary ops, no extra parens for atoms or negations.",
+            options: ["Atomic", "Conditional", "Conjunction", "Disjunction", "Negation", "Biconditional", "Not a wff"], 
+            questions: [{ q: "A", a: "Atomic" }, { q: "(A", a: "Not a wff" }, { q: "(A)", a: "Not a wff" }, { q: "(A → B)", a: "Conditional" }, { q: "~(A → B)", a: "Negation" }, { q: "~(P → Q) v ~(Q & R)", a: "Not a wff" }] 
+          },
+          { id: "ex1.2.2", title: "Exercise 1.2.2", type: "text", questions: [{ q: "A", a: "A" }, { q: "(A → B)", a: "A → B" }, { q: "(A → (B → C))", a: "A → (B → C)" }, { q: "((P & Q) → R)", a: "(P & Q) → R" }, { q: "((A & B) v (C → (D ↔ (G & I))))", a: "(A & B) v (C → (D ↔ (G & I)))" }, { q: "~(A → B)", a: "~(A → B)" }] }
+      ]},
+      { id: "1.3", title: "Translation", exercises: [
+          { id: "ex1.3", title: "Exercise 1.3: 1-10", type: "text", startIndex: 1, questions: [{ q: "John is dancing but Mary is not dancing.", a: "P & ~Q" }, { q: "If John does not dance, then Mary will not be happy.", a: "~P → ~T" }, { q: "John's dancing is sufficient to make Mary happy.", a: "P → T" }, { q: "John's dancing is necessary to make Mary happy.", a: "T → P" }, { q: "John will not dance unless Mary is happy.", a: "~T → ~P" }] },
+          { id: "ex1.3.1", title: "Exercise 1.3.1: 11-15", type: "text", startIndex: 11, questions: [{ q: "If deterrence and CP effectiveness, continue CP.", a: "(P & Q) → R" }, { q: "Capital punishment is not an effective deterrent although it is used in the United States.", a: "~Q & S" }, { q: "Capital punishment should not be continued if it is not an effective deterrent, unless deterrence is not a purpose of punishment.", a: "P → (~Q → ~R)" }] }
+      ]},
+      { id: "1.4", title: "Rules of Proof", exercises: [
+          { id: "ex1.4.1", title: "Exercise 1.4.1", type: "proof", isSequential: true, startIndex: 1, questions: [{ q: "P & Q ⊢ P", a: "1 (1) P & Q A\n1 (2) P 1 &E" }, { q: "P, Q ⊢ P & Q", a: "1 (1) P A\n2 (2) Q A\n1,2 (3) P & Q 1,2 &I" }, { q: "P → Q, P ⊢ Q", a: "1 (1) P → Q A\n2 (2) P A\n1,2 (3) Q 1,2 →E" }] },
+          { id: "ex1.4.1a", title: "Exercise 1.4.1a", type: "proof", isSequential: true, startIndex: 11, questions: [{ q: "P → Q, ~Q ⊢ ~P", a: "1 (1) P → Q A\n2 (2) ~Q A\n3 (3) P A\n1,3 (4) Q 1,3 →E\n1,2,3 (5) Q & ~Q 4,2 &I\n1,2 (6) ~P 3,5 ~I" }, { q: "P v Q, ~P ⊢ Q", a: "1 (1) P v Q A\n2 (2) ~P A\n3 (3) P A\n4 (4) ~Q A\n2,3 (5) P & ~P 3,2 &I\n2,3 (6) Q 4,5 RAA\n7 (7) Q A\n1,2 (8) Q 1,3,6,7,7 vE" }] }
+      ]},
+      { id: "1.6", title: "Theorems", exercises: [
+          { id: "ex1.6", title: "Exercise 1.6", type: "proof", isSequential: true, questions: [
+            { q: "⊢ P → P", a: "1 (1) P A\n (2) P → P 1,1 →I" },
+            { q: "⊢ P v ~P", a: "1 (1) ~(P v ~P) A\n2 (2) P A\n2 (3) P v ~P 2 vI\n1,2 (4) (P v ~P) & ~(P v ~P) 3,1 &I\n1 (5) ~P 2,4 ~I\n1 (6) P v ~P 5 vI\n1 (7) (P v ~P) & ~(P v ~P) 6,1 &I\n (8) P v ~P 1,7 RAA" },
+            { q: "⊢ ~(P & ~P)", a: "1 (1) P & ~P A\n1 (2) P 1 &E\n1 (3) ~P 1 &E\n1 (4) P & ~P 2,3 &I\n (5) ~(P & ~P) 1,4 ~I" },
+            { q: "⊢ P → (Q → P)", a: "1 (1) P A\n2 (2) Q A\n1 (3) Q → P 2,1 →I\n (4) P → (Q → P) 1,3 →I" },
+            { q: "⊢ (P → Q) v (Q → P)", a: "Paradox" },
+            { q: "⊢ P ↔ ~~P", a: "1 (1) P A\n2 (2) ~P A\n1,2 (3) P & ~P 1,2 &I\n1 (4) ~~P 2,3 ~I\n (5) P → ~~P 1,4 →I\n6 (6) ~~P A\n7 (7) ~P A\n6,7 (8) ~~P & ~P 6,7 &I\n6 (9) P 7,8 RAA\n (10) ~~P → P 6,9 →I\n (11) P ↔ ~~P 5,10 ↔I" }
+          ]}
+      ]},
+      { id: "tool.sandbox", title: "Reference Tool", exercises: [{ id: "sandbox", title: "Primal Proof Checker", description: "Standalone validator for custom sequents.", type: "sandbox" }] }
+    ]
+  },
+  {
+    id: 2,
+    title: "Chapter 2: Truth Tables",
+    subsections: [
+      { id: "2.1", title: "Truth Tables for Sentences", exercises: [
+          { id: "ex2.1a", title: "Exercise 2.1.a: Verification", type: "truth-table-static", startIndex: 1, isSequential: true, questions: [{ q: "P v (~P v Q)" }, { q: "~(P & Q) v P" }, { q: "~(P → Q) → P" }, { q: "(P v Q) v (~P & Q)" }, { q: "(P v Q) → (R v ~P)" }] },
+          { id: "ex2.1b", title: "Exercise 2.1.b: Interaction", type: "truth-table-interactive", startIndex: 6, isSequential: true, questions: [{ q: "R ↔ (~~P v (R & Q))" }, { q: "(P & Q → Q) → (Q → P)" }, { q: "(P ↔ ~Q) ↔ (~P ↔ ~Q)" }, { q: "(P ↔ Q) → (P v R → (~Q → R))" }, { q: "(P & Q) v (R & S) → (P & R) v (Q & S)" }] }
+      ]}
+    ]
+  }
+];
+
+export default function App() {
+  const [activeChapter, setActiveChapter] = useState(null);
+  const [activeSub, setActiveSub] = useState(null);
+  const [activeQuiz, setActiveQuiz] = useState(null);
+  const [userAnswers, setUserAnswers] = useState({});
+  const [quizResult, setQuizResult] = useState(null);
+  const [submissionCode, setSubmissionCode] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [proofStep, setProofStep] = useState(0);
+  const [checkResult, setCheckResult] = useState(null);
+  const [showTable, setShowTable] = useState(false);
+  const [sandboxSequent, setSandboxSequent] = useState("P & Q ⊢ P");
+  const [ttInputs, setTtInputs] = useState({}); 
+
+  const inputRefs = useRef({});
+
+  const allAnswered = useMemo(() => {
+    if (!activeQuiz) return false;
+    const type = activeQuiz.type || '';
+    if (type === 'sandbox') return true;
+    if (type === 'truth-table-interactive') {
+        const q = activeQuiz.questions[proofStep];
+        if (!q) return false;
+        const tt = generateTT(q.q);
+        return tt.rows.every((_, i) => ttInputs[i] === 'T' || ttInputs[i] === 'F');
+    }
+    const questions = activeQuiz.questions || [];
+    if (questions.length === 0) return false;
+    if (activeQuiz.isSequential) return userAnswers[proofStep] !== undefined && userAnswers[proofStep] !== "";
+    return Object.keys(userAnswers).length === questions.length;
+  }, [activeQuiz, userAnswers, proofStep, ttInputs]);
+
+  const handleStartQuiz = (quiz) => {
+    setActiveQuiz(quiz); setUserAnswers({}); setQuizResult(null); setSubmissionCode(""); setProofStep(0); setCheckResult(null); setShowTable(false); setTtInputs({});
+  };
+
+  const handleNextStep = () => {
+    const type = activeQuiz?.type || '';
+    if (type === 'truth-table-interactive') {
+        const tt = generateTT(activeQuiz.questions[proofStep].q);
+        const allCorrect = tt.rows.every((row, i) => ttInputs[i] === row.result);
+        setUserAnswers(p => ({ ...p, [proofStep]: allCorrect }));
+    }
+    if (proofStep < activeQuiz.questions.length - 1) {
+        setProofStep(s => s + 1); setShowTable(false); setTtInputs({}); setCheckResult(null);
+    } else {
+        handleSubmitQuiz();
+    }
+  };
+
+  const insertSymbol = (qIdx, symbol, targetSetter = null) => {
+    if (targetSetter) { targetSetter(prev => prev + symbol); return; }
+    const currentVal = userAnswers[qIdx] || "";
+    const input = inputRefs.current[qIdx];
+    if (input) {
+      const start = input.selectionStart || 0; const end = input.selectionEnd || 0;
+      const newVal = currentVal.substring(0, start) + symbol + currentVal.substring(end);
+      setUserAnswers(p => ({ ...p, [qIdx]: newVal }));
+      setTimeout(() => { if (input.focus) input.focus(); }, 0);
+    } else {
+      setUserAnswers(p => ({ ...p, [qIdx]: currentVal + symbol }));
+    }
+    setCheckResult(null);
+  };
+
+  const handleCheckWork = () => {
+    if (!activeQuiz) return;
+    const type = activeQuiz.type || '';
+    const currentSequent = type === 'sandbox' ? sandboxSequent : activeQuiz.questions[proofStep].q;
+    const currentAnswer = type === 'sandbox' ? (userAnswers['sb'] || "") : (userAnswers[proofStep] || "");
+    const val = validateProof(currentAnswer, currentSequent);
+    setCheckResult(val);
+  };
+
+  const handleSubmitQuiz = () => {
+    if (!activeQuiz) return;
+    const type = activeQuiz.type || '';
+    let score = 0;
+    const finalAnswers = { ...userAnswers };
+    
+    if (type === 'truth-table-interactive') {
+        const currentQ = activeQuiz.questions[proofStep];
+        if (currentQ) {
+            const tt = generateTT(currentQ.q);
+            finalAnswers[proofStep] = tt.rows.every((row, i) => ttInputs[i] === row.result);
+        }
+    }
+
+    const results = activeQuiz.questions.map((q, idx) => {
+      if (type === 'proof') {
+        const val = validateProof(userAnswers[idx] || "", q.q);
+        if (val.valid) score++;
+        return { isCorrect: val.valid, valError: val.error || "" };
+      } else if (type && type.includes('truth-table')) {
+        if (finalAnswers[idx]) score++;
+        return { isCorrect: finalAnswers[idx] === true };
+      } else {
+        const clean = (s) => String(s || "").replace(/\s+/g, '').replace(/->/g, '→').replace(/<->/g, '↔').replace(/-/g, '~');
+        const isCorrect = clean(userAnswers[idx]) === clean(q.a);
+        if (isCorrect) score++;
+        return { isCorrect: isCorrect };
+      }
+    });
+
+    const now = new Date();
+    const percent = Math.round((score / activeQuiz.questions.length) * 100);
+    setSubmissionCode(`${String(now.getDate()).padStart(2, '0')}${percent === 100 ? "g1" : String(percent).padStart(2, '0')}${Math.random().toString(36).substring(2, 4).toUpperCase()}`);
+    setQuizResult({ score, results });
+  };
+
+  const connectives = ['~', '&', 'v', '→', '↔', '(', ')'];
+  const rules = ['A', '&I', '&E', 'vI', 'vE', '→I', '→E', '~I', '~E', 'RAA'];
+
+  return (
+    <div className="min-h-screen bg-[#f4f1ea] text-[#2d2a26] font-sans p-4 md:p-8">
+      <header className="max-w-4xl mx-auto mb-12 border-b-2 border-emerald-900/10 pb-6 flex items-center justify-between">
+        <button onClick={() => { setActiveChapter(null); setActiveSub(null); setActiveQuiz(null); }} className="text-left outline-none">
+          <h1 className="text-4xl font-black text-emerald-900 flex items-center gap-4">
+            <ApePadlockIcon /> LOGIC APE
+          </h1>
+        </button>
+      </header>
+
+      <main className="max-w-4xl mx-auto pb-20">
+        {!activeChapter && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in slide-in-from-bottom-4">
+            {LOGIC_PRIMER_DATA.map((chapter) => (
+              <button key={chapter.id} onClick={() => setActiveChapter(chapter)} className="bg-white p-10 rounded-3xl border-2 border-stone-200 text-left min-h-[200px] hover:border-emerald-600 shadow-md transition-all">
+                <span className="bg-stone-100 px-3 py-1 rounded text-stone-500 font-mono text-[10px] font-bold tracking-widest">CH 0{String(chapter.id)}</span>
+                <h2 className="text-2xl font-black text-stone-800 mt-4 leading-tight">{String(chapter.title)}</h2>
+                <div className="mt-8 flex items-center text-stone-400 font-bold text-xs tracking-widest">CLIMB HIGHER <ChevronRight size={14} className="ml-1" /></div>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {activeChapter && !activeSub && (
+          <div className="animate-in fade-in zoom-in-95">
+            <button onClick={() => setActiveChapter(null)} className="flex items-center text-emerald-800/60 mb-8 font-bold text-sm tracking-widest">
+              <ArrowLeft size={18} className="mr-1" /> RETURN
+            </button>
+            <div className="bg-white rounded-[2rem] border-2 border-stone-200 shadow-2xl overflow-hidden">
+              <div className="bg-emerald-900 p-10 text-white relative">
+                <h2 className="text-4xl font-black tracking-tight">{String(activeChapter.title)}</h2>
+              </div>
+              <div className="p-6 space-y-3 bg-stone-50/30">
+                {activeChapter.subsections.map((sub) => (
+                  <button key={sub.id} onClick={() => setActiveSub(sub)} className="w-full text-left p-6 bg-white border border-stone-200 rounded-2xl flex items-center justify-between hover:border-amber-400 shadow-sm transition-all">
+                    <span className="font-bold text-stone-700">{String(sub.id)} {String(sub.title)}</span>
+                    <Leaf size={18} className="text-stone-300" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeSub && !activeQuiz && (
+          <div className="animate-in fade-in zoom-in-95">
+            <button onClick={() => setActiveSub(null)} className="flex items-center text-emerald-800/60 mb-8 font-bold text-sm tracking-widest">
+              <ArrowLeft size={18} className="mr-1" /> BACK
+            </button>
+            <div className="bg-white rounded-[2rem] border-2 border-stone-200 shadow-xl overflow-hidden">
+              <div className="p-10 border-b bg-stone-50">
+                <h2 className="text-3xl font-black text-emerald-900 tracking-tight">{String(activeSub.id)} {String(activeSub.title)}</h2>
+              </div>
+              <div className="p-8 space-y-4">
+                {activeSub.exercises ? activeSub.exercises.map(ex => (
+                  <button key={ex.id} onClick={() => handleStartQuiz(ex)} className="w-full text-left p-8 bg-white border-2 border-stone-200 rounded-3xl hover:border-emerald-900 shadow-sm transition-all">
+                    <h3 className="text-xl font-black text-emerald-900 flex items-center gap-2">
+                        {ex.type === 'sandbox' && <Zap size={18} className="text-amber-500" />}
+                        {String(ex.title)}
+                    </h3>
+                    <p className="text-stone-500 text-sm mt-1 leading-relaxed">{String(ex.description || "Assignment set.")}</p>
+                    <div className="mt-4 inline-flex items-center font-black text-xs uppercase tracking-widest text-emerald-600">ENTER TERRITORY <ChevronRight size={14} className="ml-1" /></div>
+                  </button>
+                )) : <p className="text-stone-400 italic text-center p-10 font-bold">Mist obscures this path.</p>}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeQuiz && !quizResult && (
+          <div className="animate-in slide-in-from-bottom-8">
+            <button onClick={() => setActiveQuiz(null)} className="flex items-center text-emerald-800/60 mb-8 font-bold text-sm tracking-widest uppercase">
+              <ArrowLeft size={18} className="mr-1" /> ABANDON
+            </button>
+            
+            <div className="bg-white rounded-[2rem] border-2 border-stone-200 shadow-2xl overflow-hidden">
+              <div className={`p-8 text-white flex justify-between items-center ${activeQuiz.type === 'sandbox' ? 'bg-amber-600' : 'bg-emerald-900'}`}>
+                <div>
+                  <h2 className="text-3xl font-black uppercase text-amber-400">{String(activeQuiz.title)}</h2>
+                  <p className="text-white/70 text-sm font-medium">{String(activeQuiz.description)}</p>
+                </div>
+                {activeQuiz.isSequential && <div className="bg-emerald-800 px-4 py-2 rounded-xl text-[10px] font-black tracking-widest ring-2 ring-emerald-600">STEP {proofStep + 1} / {activeQuiz.questions.length}</div>}
+              </div>
+
+              <div className="p-8 space-y-8">
+                {activeQuiz.type === 'sandbox' ? (
+                  <div className="space-y-6">
+                    <div className="p-6 bg-amber-50 rounded-2xl border-2 border-amber-200">
+                      <p className="text-xs font-black text-amber-800 uppercase tracking-widest mb-3">Custom Target Sequent</p>
+                      <div className="flex gap-2">
+                        <input type="text" value={String(sandboxSequent)} onChange={(e) => setSandboxSequent(e.target.value)} className="flex-1 p-4 border-2 rounded-xl font-mono text-xl font-black shadow-inner" placeholder="e.g. P & Q ⊢ P" />
+                        {['⊢', '→', '↔', '~', '&', 'v'].map(sym => <button key={sym} onClick={() => setSandboxSequent(p => p + sym)} className="px-4 py-2 bg-white border-2 rounded-xl font-black text-amber-900 hover:border-amber-400 active:scale-95">{String(sym)}</button>)}
+                      </div>
+                    </div>
+                    <div className="flex flex-col lg:flex-row gap-8">
+                      <div className="flex-1 space-y-4">
+                        <div className="flex flex-wrap gap-1">
+                          {['~', '&', 'v', '→', '↔', '(', ')'].map(sym => <button key={sym} onClick={() => insertSymbol('sb', sym)} className="px-4 py-2 bg-stone-100 border-2 rounded-xl font-black text-emerald-900 hover:border-emerald-600 active:scale-95 shadow-sm">{String(sym)}</button>)}
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                           {['A', '&I', '&E', 'vI', 'vE', '→I', '→E', '~I', '~E', 'RAA'].map(rule => <button key={rule} onClick={() => insertSymbol('sb', ` ${rule}`)} className="px-3 py-2 bg-emerald-50 border-2 rounded-xl text-[10px] font-black text-emerald-900 hover:bg-emerald-900 hover:text-white transition-all shadow-sm">{String(rule)}</button>)}
+                        </div>
+                        {checkResult && <div className={`p-5 rounded-2xl border-4 ${checkResult.valid ? 'bg-emerald-50 border-emerald-400 text-emerald-900' : 'bg-rose-50 border-rose-400 text-rose-900'} font-bold`}>
+                            {checkResult.valid ? <CheckCircle2 className="inline mr-2" /> : <AlertCircle className="inline mr-2" />}
+                            {String(checkResult.valid ? "VALID DERIVATION" : checkResult.error)}
+                        </div>}
+                      </div>
+                      <textarea ref={el => inputRefs.current['sb'] = el} value={String(userAnswers['sb'] || "")} onChange={(e) => setUserAnswers(p => ({...p, sb: e.target.value}))} className="w-full lg:w-[450px] h-96 p-6 bg-stone-100 border-2 border-stone-200 rounded-3xl font-mono text-xs focus:bg-white focus:border-emerald-600 outline-none leading-relaxed shadow-inner" placeholder="Deps (Line#) Formula Rule" />
+                    </div>
+                  </div>
+                ) : (activeQuiz.type || '').includes('truth-table') ? (
+                  <div className="animate-in fade-in duration-300">
+                    <div className="p-6 bg-stone-100 rounded-2xl border-2 border-stone-200 font-mono text-center text-2xl font-black mb-8 shadow-inner">
+                      {String(activeQuiz.questions[proofStep]?.q || "")}
+                    </div>
+                    { (showTable || activeQuiz.type === 'truth-table-interactive') && activeQuiz.questions[proofStep] && (
+                      <div className="mb-8 overflow-x-auto">
+                        <table className="w-full text-center border-collapse border-4 border-stone-200 rounded-2xl">
+                          <thead>
+                            <tr className="bg-emerald-900 text-white font-black uppercase text-xs">
+                              {generateTT(activeQuiz.questions[proofStep].q).atoms.map(a => <th key={a} className="p-4 border-2 border-stone-200">{String(a)}</th>)}
+                              <th className="p-4 border-2 border-amber-500 bg-amber-600">RESULT</th>
+                            </tr>
+                          </thead>
+                          <tbody className="bg-white font-mono font-bold text-lg">
+                            {generateTT(activeQuiz.questions[proofStep].q).rows.map((row, i) => (
+                              <tr key={i} className="hover:bg-stone-50">
+                                {generateTT(activeQuiz.questions[proofStep].q).atoms.map(a => <td key={a} className="p-4 border-2 border-stone-200">{String(row[a])}</td>)}
+                                <td className="p-4 border-2 border-stone-200 w-32">
+                                  {activeQuiz.type === 'truth-table-static' ? (
+                                    <span className={row.result === 'T' ? 'text-emerald-600' : 'text-rose-600'}>{String(row.result)}</span>
+                                  ) : (
+                                    <button onClick={() => setTtInputs(p => ({...p, [i]: ttInputs[i] === 'T' ? 'F' : 'T'}))} className={`w-full py-2 rounded-xl border-4 transition-all ${ttInputs[i] === 'T' ? 'bg-emerald-600 border-emerald-800 text-white' : ttInputs[i] === 'F' ? 'bg-rose-600 border-rose-800 text-white' : 'bg-stone-100 border-stone-200 text-stone-400'}`}>
+                                      {String(ttInputs[i] || "?")}
+                                    </button>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                    <div className="flex gap-4">
+                      {activeQuiz.type === 'truth-table-static' && <button onClick={() => setShowTable(!showTable)} className="px-8 py-5 bg-stone-200 font-black rounded-2xl shadow-md uppercase tracking-widest text-xs">Toggle Table</button>}
+                      <button onClick={handleNextStep} disabled={!allAnswered} className={`flex-1 py-5 rounded-2xl font-black text-xl shadow-xl transition-all ${allAnswered ? 'bg-emerald-900 text-white' : 'bg-stone-200 text-stone-400 cursor-not-allowed'}`}>
+                        {proofStep < activeQuiz.questions.length - 1 ? "CONFIRM & NEXT" : "SUBMIT SET"}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-8">
+                    {activeQuiz.questions.map((q, idx) => {
+                      if (activeQuiz.isSequential && idx !== proofStep) return null;
+                      return (
+                        <div key={idx} className="flex flex-col lg:flex-row gap-8 items-start">
+                          <div className="flex-1 space-y-4">
+                            <div className="flex gap-4 items-center">
+                              <span className="font-mono font-black text-stone-300 text-xl">{(activeQuiz.startIndex || 1) + idx}.</span>
+                              <div className="flex items-center gap-2 p-3 bg-stone-100 rounded-xl border border-stone-200 w-full shadow-inner font-mono font-bold text-stone-700">{String(q.q)}</div>
+                            </div>
+                            <div className="flex flex-wrap gap-1">
+                                {['~', '&', 'v', '→', '↔', '(', ')'].map(sym => <button key={sym} onClick={() => insertSymbol(idx, sym)} className="px-3 py-2 bg-white border-2 rounded-xl text-sm font-black text-emerald-900 hover:border-emerald-600 active:scale-95 transition-all shadow-sm">{String(sym)}</button>)}
+                            </div>
+                            {activeQuiz.type === 'proof' && (
+                                <div className="flex flex-wrap gap-1">
+                                    {['A', '&I', '&E', 'vI', 'vE', '→I', '→E', '~I', '~E', 'RAA'].map(rule => <button key={rule} onClick={() => insertSymbol(idx, ` ${rule}`)} className="px-2 py-1.5 bg-emerald-50 border-2 rounded-xl text-[10px] font-black text-emerald-900 shadow-sm hover:bg-emerald-900 hover:text-white">{String(rule)}</button>)}
+                                </div>
+                            )}
+                            {checkResult && <div className={`p-4 rounded-xl border-2 font-bold ${checkResult.valid ? 'bg-emerald-50 border-emerald-400 text-emerald-900' : 'bg-rose-50'}`}>{String(checkResult.valid ? "VALID" : checkResult.error)}</div>}
+                          </div>
+                          <div className="w-full lg:w-[400px]">
+                            {activeQuiz.type === 'proof' ? (
+                                <textarea ref={el => inputRefs.current[idx] = el} value={String(userAnswers[idx] || "")} onChange={(e) => { setUserAnswers(p => ({...p, [idx]: e.target.value})); setCheckResult(null); }} className="w-full h-80 p-5 bg-stone-100 border-2 rounded-2xl font-mono text-xs focus:bg-white focus:border-emerald-600 outline-none leading-relaxed shadow-inner" placeholder="Deps (Line#) Formula Justification" />
+                            ) : activeQuiz.options ? (
+                                <div className="flex flex-wrap gap-2 justify-end">
+                                    {activeQuiz.options.map(opt => <button key={opt} onClick={() => setUserAnswers(p => ({...p, [idx]: opt}))} className={`px-4 py-2 rounded-lg font-black border-2 transition-all ${userAnswers[idx] === opt ? 'bg-emerald-900 text-white border-emerald-800 shadow-lg scale-105' : 'bg-white text-stone-400 border-stone-100 hover:border-stone-300'}`}>{String(opt).toUpperCase()}</button>)}
+                                </div>
+                            ) : (
+                                <input type="text" ref={el => inputRefs.current[idx] = el} value={String(userAnswers[idx] || "")} onChange={(e) => setUserAnswers(p => ({...p, [idx]: e.target.value}))} className="w-full p-4 border-2 rounded-xl font-mono focus:border-emerald-600 outline-none shadow-inner" placeholder="Logic input..." />
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                    <div className="flex gap-4 pt-6 justify-center">
+                        {activeQuiz.type === 'proof' && <button onClick={handleCheckWork} className="px-10 py-5 bg-amber-500 text-white font-black rounded-2xl shadow-xl hover:bg-amber-600 transition-all uppercase tracking-widest text-xs">Check Work</button>}
+                        <button onClick={handleNextStep} disabled={!allAnswered} className={`flex-1 py-5 rounded-2xl font-black text-xl shadow-xl transition-all ${allAnswered ? 'bg-emerald-900 text-white' : 'bg-stone-200 text-stone-400 cursor-not-allowed'}`}>
+                            {activeQuiz.isSequential && proofStep < activeQuiz.questions.length - 1 ? "NEXT STEP" : "SUBMIT ASSIGNMENT"}
+                        </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {quizResult && (
+          <div className="bg-white rounded-[3rem] p-12 text-center border-8 border-emerald-900 animate-in zoom-in-95 shadow-2xl">
+            <Trophy size={80} className="mx-auto text-amber-500 mb-6 drop-shadow-lg" />
+            <h2 className="text-5xl font-black text-emerald-900 mb-4 tracking-tighter">PRIMAL TRAIL COMPLETED</h2>
+            <p className="text-stone-500 font-bold mb-8 text-xl uppercase tracking-widest">Score: {String(quizResult.score)} / {String(activeQuiz.questions.length)}</p>
+            <div className="bg-stone-100 p-8 rounded-3xl mb-10 border-4 border-stone-200">
+                <span className="text-xs font-black text-stone-400 uppercase tracking-widest block mb-4">Submission Verification Code</span>
+                <div className="font-mono text-3xl font-black tracking-[0.3em] text-emerald-900 bg-white p-4 rounded-xl shadow-inner inline-block min-w-[300px]">{String(submissionCode)}</div>
+            </div>
+            <button onClick={() => { setActiveQuiz(null); setQuizResult(null); }} className="px-16 py-6 bg-emerald-900 text-white font-black rounded-2xl text-2xl hover:bg-emerald-800 shadow-xl transition-all active:scale-95">RETURN TO TERRITORY</button>
+          </div>
+        )}
+      </main>
+
+      <footer className="text-center py-16 text-stone-400 text-[10px] font-bold tracking-[0.2em] uppercase border-t-2 border-stone-200 max-w-4xl mx-auto">
+        © Logic Ape // The Evolution of Reason // Daniel Patrone System
+      </footer>
+    </div>
+  );
+}
